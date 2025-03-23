@@ -14,7 +14,7 @@ make
 
 ## Hide
 ```sh
-lsmod # You will see the rootkit module. 
+lsmod # You will see the rootkit module.
 ./hide_test
 lsmod # You won't see the rootkit module.
 ./hide_test
@@ -36,3 +36,9 @@ ps ao pid,comm # You will see 'bash' process to be 'bas'
 ```sh
 ./filter_test
 ```
+
+
+## TODO
+- Finish `write-up.md`.
+- Add one more syscall filtering. (Fairly easy)
+- Integrate the code together.
