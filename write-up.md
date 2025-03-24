@@ -4,6 +4,7 @@
 
 ```sh
 - user_space_test_code
+------ a # The stdin for the process.
 ------ hide_test.c # hide test code
 ------ masq_test.c # masquerade test code
 ------ filter_test.c # filter test code (each process)
