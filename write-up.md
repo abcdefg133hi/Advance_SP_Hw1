@@ -243,6 +243,10 @@ Child process was not terminated by abnormal signal
 - **Q:** The system call filtering based approach is vulnerable to the so called Returned Oriented Programming (ROP) attack, why is that? Name a concrete attack example in your write-up, and discuss approaches that you could use to address the vulnerabilities.
 
 - **A:** In this kind of system call filtering based approach, we stored our hooked system call function pointers and our own filtered functions (eg: `my_read` and `my_write`) pointers toward the kernel stack memory, which is typically writable by the kernel. Therefore, if the attackers can find loopholes to make the kernel overwrite the return address, they can redirect the return address to their sections of codes (Gadgets). One example is the malicious kernel stack overflow. The attackers can call memory-related system call for lots of time, such as `open`, where the input parameters may be the malicious assembly codes to redirect the return address to their code session. This way, they can esclate their previllages and run everything they want, such as crashing the kernel. To address this issue, we think the best way is to preserve every functions pointers for `read_only` section (or `const`). Although this might sacrifice the power of dynamic update, it is more safe. Also, we could enable `KASLR` to make the attackers more difficult to predict the return address, which would probably reduce the number of successful attacking.
+- **A:**
+- In a system call filtering approach that hooks the sys_call_table, attackers can bypass any interception on the table if they employ Return-Oriented Programming (ROP) to manipulate the return address. ROP entails "chaining" executable instruction fragments (gadgets) and, by overwriting stack or return addresses, directly invoking low-level functions (e.g., vfs_write()) at the kernel level, without going through the custom hook entries in the sys_call_table. In other words, if exploitable gadgets exist in the kernel that can move register values, call functions, etc., attackers can assemble and place the parameters onto the stack or into registers. They then jump straight to the desired function, effectively circumventing the interception logic placed in the sys_call_table.
+- A concrete attack scenario might involve a “malicious kernel stack overflow” or a memory corruption bug triggered by repeatedly calling system calls like open or read with specially crafted parameters. This leads the kernel to overwrite the return address with the starting address of ROP gadgets. By chaining these gadgets, attackers can set up arguments for and then directly call, for instance, vfs_write()—skipping the hooked write function entirely. As a result, the system call filtering becomes effectively useless.
+- To defend against such attacks, one should not only store function pointers or critical structures in read-only segments (so they cannot be overwritten during runtime), but also adopt higher-level defenses. For instance, enabling Kernel Address Space Layout Randomization (KASLR) reduces the attacker’s knowledge of kernel addresses, and implementing Control Flow Integrity (CFI) or hardware-assisted protections (e.g., Intel CET or ARM Pointer Authentication) can further obstruct ROP. While these techniques might reduce dynamic update flexibility or impose performance overhead, they are necessary security measures to withstand high-risk ROP attacks.
 
 ## Question 2
 
@@ -262,3 +266,8 @@ Child process was not terminated by abnormal signal
 
 1. https://blog.csdn.net/weixin_45030965/article/details/129203081
 2. https://blog.csdn.net/u013250169/article/details/114374228
+3. https://blog.wohin.me/posts/linux-rootkit-04/
+4. https://blog.csdn.net/cswhl/article/details/110842196
+5. https://blog.csdn.net/anyegongjuezjd/article/details/128322592
+6. https://blog.csdn.net/weixin_45030965/article/details/132497956
+7. we also discuss with group 13
